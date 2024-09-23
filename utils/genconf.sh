@@ -13,9 +13,9 @@ port $port
 cluster-enabled yes
 cluster-config-file nodes-$port.conf
 cluster-node-timeout 5000
-appendonly no  # 禁用磁盘上的 AOF 日志
-save ""  # 禁用从磁盘恢复 RDB 数据
-daemonize yes  # 后台运行
+appendonly no  
+save ""  
+daemonize yes  
 protected-mode no
 dir $CONFIG_DIR
 EOF

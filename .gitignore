@@ -16,3 +16,4 @@ utils/commands.h
 utils/COMMANDS.md
 utils/*.csv
 .DS_Store
+utils/7*
