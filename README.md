@@ -1,32 +1,19 @@
-# Current status
-
-**This project is currently not actively maintained.**
-It is alpha code that was indented to be evaluated by the community in order to get suggestions and contributions.
-We discourage its usage in any production environment.
-
-# Redis Cluster Proxy
-
-Redis Cluster Proxy is a proxy for [Redis](https://redis.io/) Clusters.
-Redis has the ability to run in Cluster mode, where a set of Redis instances will take care of failover and partitioning. This special mode requires the use of special clients understanding the Cluster protocol: by using this Proxy instead the Cluster is abstracted away, and you can talk with a set of instances composing a Redis Cluster like if they were a single instance.
-Redis Cluster Proxy is multi-threaded and it currently uses, by default, a multiplexing communication model so that every thread has its own connection to the cluster that is shared to all clients belonging to the thread itself.
-Anyway, in some special cases (ie. `MULTI` transactions or blocking commands), the multiplexing gets disabled and the client will have its own cluster connection.
-In this way clients just sending trivial commands like GETs and SETs will
-not require a private set of connections to the Redis Cluster.
-
-So, these are the main features of Redis Cluster Proxy:
-
-- Routing: every query is automatically routed to the correct node of the cluster
+# introduction
+Tanya is a open source proxy for redis/valkey cluster inspired by [redis-cluster-proxy](https://github.com/RedisLabs/redis-cluster-proxy)
+main feature of Tanya:
+- Routing: every query is automatically routed to the correct node of the cluster 
 - Multithreaded
 - Both multiplexing and private connection models supported
 - Query execution and reply order are guaranteed even in multiplexing contexts
-- Automatic update of the cluster's configuration after `ASK|MOVED` errors: when those kinds of errors occur in replies, the proxy automatically updates its internal representation of the cluster by fetching an updated configuration of it and by remapping all the slots. All queries will be re-executed after the update is completed, so that, from the client's point-of-view, everything flows as normal (the clients won't receive the ASK|MOVED error: they will directly receive the expected replies after the cluster configuration has been updated).
-- Cross-slot/Cross-node queries: many commands involving multiple keys belonging to different slots (or even to different cluster nodes) are supported. Those commands will split the query into multiple queries that will be routed to different slots/nodes. Reply handling for those commands is command-specific. Some commands, such as `MGET`, will merge all the replies as if they were a single reply. Other commands such as `MSET` or `DEL` will sum the results of all the replies. Since those queries actually break the atomicity of the command, their usage is optional (disabled by default). See below for more info.
-- Some commands with no specific node/slot such as `DBSIZE` are delivered to all the nodes and the replies will be map-reduced in order to give a sum of all the values contained in all the replies.
-- The additional `PROXY` command that can be used to perform some proxy-specific actions.
+- Automatic update of the cluster's configuration after ASK|MOVED errors: when those kinds of errors occur in replies, the proxy automatically updates its internal representation of the cluster by fetching an updated configuration of it and by remapping all the slots. All queries will be re-executed after the update is completed, so that, from the client's point-of-view, everything flows as normal (the clients won't receive the ASK|MOVED error: they will directly receive the expected replies after the cluster configuration has been updated).
+- Cross-slot/Cross-node queries: many commands involving multiple keys belonging to different slots (or even to different cluster nodes) are supported. Those commands will split the query into multiple queries that will be routed to different slots/nodes. Reply handling for those commands is command-specific. Some commands, such as MGET, will merge all the replies as if they were a single reply. Other commands such as MSET or DEL will sum the results of all the replies. Since those queries actually break the atomicity of the command, their usage is optional (disabled by default). See below for more info.
+- Some commands with no specific node/slot such as DBSIZE are delivered to all the nodes and the replies will be map-reduced in order to give a sum of all the values contained in all the replies.
+The additional PROXY command that can be used to perform some proxy-specific actions.
+- Supports redis Pub/Sub
 
 # Build
 
-Redis Cluster Proxy should run without issues on most POSIX systems (Linux, macOS/OSX, NetBSD, FreeBSD) and on the same platforms supported by Redis.
+Tanya should run without issues on most POSIX systems (Linux, macOS/OSX, NetBSD, FreeBSD) and on the same platforms supported by Redis.
 
 **Anyway**, it requires C11 and its **atomic variables**, so please ensure that your compiler is supporting both C11 and atomic variables (`_Atomic`).
 As for **GCC**, those features are supported by version 4.9 or later.
@@ -56,41 +43,32 @@ And, finally, if you want to launch tests, just type:
 `% REDIS_HOME=/path/to/my/redis/src make test`
 
 As you can see, the make syntax (but also the output style) is the same used in Redis, so it will be familiar to Redis users.
-
-# Install
-
-In order to install Redis Cluster Proxy into /usr/local/bin just use:
-
-`% make install`
-
-You can use make PREFIX=/some/other/directory install if you wish to use a different destination.
-
 # Usage
 
-Redis Cluster Proxy attaches itself to an already running Redis cluster.
+tanya attaches itself to an already running Redis cluster.
 The binary will be compiled inside the `src` directory.
 The basic usage is:
 
-`./redis-cluster-proxy CLUSTER_ADDRESS`
+`./tanya CLUSTER_ADDRESS`
 
 where `CLUSTER_ADDRESS` is the host address of any cluster's instance (we call it the *entry point*), and it can be expressed in the form of an `IP:PORT` for TCP connections, or as UNIX socket by specifying the file name.
 
 For example:
 
-`./redis-cluster-proxy 127.0.0.1:7000`
+`./tanya 127.0.0.1:7000`
 
-`./redis-cluster-proxy /path/to/entry-point.socket`
+`./tanya /path/to/entry-point.socket`
 
 It is also possible to specify more entry-points as multiple addresses. The proxy will use the first reachable entry-point in order to connect to the cluster and fetch the configuration of the cluster itself.
 This can be useful since a single entry-point could be down, so you can use multiple addresses to make the proxy more reliable.
 
 Example:
 
-`./redis-cluster-proxy 127.0.0.1:7000 127.0.0.1:7001 127.0.0.1:7002`
+`./tanya 127.0.0.1:7000 127.0.0.1:7001 127.0.0.1:7002`
 
 If you need a basic help, just run it with the canonical `-h` or `--help` option.
 
-`./redis-cluster-proxy -h`
+`./tanya -h`
 
 By default, Redis Cluster Port will listen on port 7777, but you can change it with the `-p` or `--port` option.
 Furthermore, by default, Redis Cluster Port will bind all available network interfaces to listen to incoming connections.
@@ -104,31 +82,31 @@ Examples:
 
 Listen on port 7888
 
-`./redis-cluster-proxy --port 7888 127.0.0.1:7000`
+`./tanya --port 7888 127.0.0.1:7000`
 
 Listen on default port and bind only 127.0.0.1:
 
-`./redis-cluster-proxy --bind 127.0.0.1 127.0.0.1:7000`
+`./tanya --bind 127.0.0.1 127.0.0.1:7000`
 
 Listen on port 7888 and bind multiple interfaces:
 
-`./redis-cluster-proxy --port 7888 --bind 192.168.0.10 --bind 10.0.0.10 127.0.0.1:7000`
+`./tanya --port 7888 --bind 192.168.0.10 --bind 10.0.0.10 127.0.0.1:7000`
 
 Listen on UNIX socket and disable TCP connections
 
-`./redis-cluster-proxy --unixsocket /path/to/proxy.socket --port 0 127.0.0.1:7000`
+`./tanya --unixsocket /path/to/proxy.socket --port 0 127.0.0.1:7000`
 
 You can change the number of threads using the `--threads` option.
 
 You can also use a configuration file instead of passing arguments by using the `-c` options, ie:
 
-`redis-cluster-proxy -c /path/to/my/proxy.conf 127.0.0.1:7000`
+`tanya -c /path/to/my/proxy.conf 127.0.0.1:7000`
 
-You can find an example `proxy.conf` file inside the main Redis Cluster Proxy's directory.
+You can find an example `proxy.conf` file inside the main tanya's directory.
 
 After launching it, you can connect to the proxy as if it were a normal Redis server (however make sure to understand the current limitations).
 
-You can then connect to Redis Cluster Proxy using the client you prefer, ie:
+You can then connect to tanya using the client you prefer, ie:
 
 `redis-cli -p 7777`
 
@@ -144,7 +122,7 @@ Every thread will re-populate its own pool after the number of connections will 
 So:
 
 ```
-redis-cluster-proxy --connections-pool-size 20 connections-pool-min-size 15 --connections-pool-spawn-rate 2 --connections-pool-spawn-every 500 127.0.0.1:7000
+tanya --connections-pool-size 20 connections-pool-min-size 15 --connections-pool-spawn-rate 2 --connections-pool-spawn-every 500 127.0.0.1:7000
 ```
 
 Means: *"create a connection pool containing 20 connections (maximum), and re-populate it when the number of connections drops below 15, by creating 2 new connections every 500 milliseconds"*.
@@ -158,11 +136,11 @@ If your cluster nodes are protected with a password, you can use the `-a`, `--au
 Furthermore, if your cluster is using the new [ACL](https://redis.io/topics/acl) implemented in Redis 6.0 and it has multiple users, you can even authenticate with a specific user by using the `--auth-user` command-line option (or `auth-user` in a config file) followed by the username.
 Examples:
 
-`redis-cluster-proxy -a MYPASSWORD 127.0.0.1:7000`
+`tanya -a MYPASSWORD 127.0.0.1:7000`
 
-`redis-cluster-proxy --auth MYPASSWORD 127.0.0.1:7000`
+`tanya --auth MYPASSWORD 127.0.0.1:7000`
 
-`redis-cluster-proxy --auth-user MYUSER --auth MYPASSWORD 127.0.0.1:7000`
+`tanya --auth-user MYUSER --auth MYPASSWORD 127.0.0.1:7000`
 
 The proxy will use these credentials to authenticate to the cluster and fetch the cluster's internal configuration, but it will also automatically authenticate all clients with the provided credentials.
 So, **all clients** that will connect to the proxy will be **automatically authenticated** with the user that is specified by `--auth-user` or with the `default` user if no user has been specified, **without the need** to call the `AUTH` command by themselves.
@@ -212,7 +190,7 @@ The `PROXY` command will allow you to get specific info or perform actions that 
 - PROXY COMMAND [UNSUPPORTED|CROSSSLOTS-UNSUPPORTED]
 
   Returns a list of all the Redis commands handled (known) 
-  by Redis Cluster Proxy, in a similar fashion to Redis `COMMAND` function.
+  by tanya, in a similar fashion to Redis `COMMAND` function.
   The returned reply is a nested Array: every command will be an item of the 
   top-level array and it will be an array itself, containing the following 
   items: command name, arity, first key, last key, key step, supported.
