@@ -1213,7 +1213,7 @@ int mergeReplies(void *_reply, void *_req, char *buf, int len) {
         if (!ok) {
             if (config.dump_buffer) {
                 proxyLogDebug("Child reply:\n%s\np:\n%s\nendl:\n%s",
-                              replyrepr, p, endl);
+                              replyrepr, p, endl ? endl : "(null)");
             }
             err = ERROR_MERGE_REPLY_INVALID_FMT;
             goto final;
@@ -4426,7 +4426,8 @@ static void acceptHandler(int fd, char *ip, int port) {
         char *err = "-ERR max number of clients reached\r\n";
         static int errlen = 0;
         if (errlen == 0) errlen = strlen(err);
-        write(fd, err, errlen);
+        int n = write(fd, err, errlen);
+        UNUSED(n);
         close(fd);
         return;
     }
@@ -4435,7 +4436,8 @@ static void acceptHandler(int fd, char *ip, int port) {
         proxyLogDebug("Failed to allocate memory for client from %s",
             ip ? ip : config.unixsocket);
         sds err = sdscatprintf(sdsempty(), "-ERR %s\r\n", ERROR_OOM);
-        write(fd, err, sdslen(err));
+        int n = write(fd, err, sdslen(err));
+        UNUSED(n);
         close(fd);
         sdsfree(err);
         return;
@@ -4451,7 +4453,8 @@ static void acceptHandler(int fd, char *ip, int port) {
         proxyLogDebug("Failed to awake thread %d for client %" PRId64,
                       thread->thread_id, c->id);
         char *err = "-ERR failed to awake thread\r\n";
-        write(fd, err, strlen(err));
+        int n= write(fd, err, strlen(err));
+        UNUSED(n);
         freeClient(c);
     }
 }

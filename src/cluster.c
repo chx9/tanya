@@ -991,7 +991,10 @@ fail:
     if (err != NULL && errmsg != NULL && *err == NULL) {
         int errlen = strlen(errmsg);
         *err = zmalloc(errlen + 1);
-        if (*err) strncpy(*err, errmsg, errlen);
+        if (*err) {
+            memcpy(*err, errmsg, errlen);
+             (*err)[errlen] = '\0';
+        }
     }
     return 0;
 }
