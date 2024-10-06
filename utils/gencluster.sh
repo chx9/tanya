@@ -5,7 +5,7 @@ END_PORT=7005
 HOST=127.0.0.1  
 
 for port in $(seq $START_PORT $END_PORT); do
-  redis-server ./$port/redis.conf &
+  redis-server ./testcluster/$port/redis.conf &
   echo "Started Redis instance on port $port."
 done
 

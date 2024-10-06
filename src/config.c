@@ -47,6 +47,7 @@ void initConfig(void) {
     config.bindaddr_count = 0;
     config.pidfile = NULL;
     config.logfile = NULL;
+    config.enable_pubsub = 1;
     config.connections_pool.size = DEFAULT_CONNECTIONS_POOL_SIZE;
     config.connections_pool.min_size = DEFAULT_CONNECTIONS_POOL_MINSIZE;
     config.connections_pool.spawn_every = DEFAULT_CONNECTIONS_POOL_INTERVAL;
