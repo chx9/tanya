@@ -63,6 +63,7 @@ typedef struct {
     int dump_queries;
     int dump_buffer;
     int dump_queues;
+    int enable_pubsub;
     char *auth;
     char *auth_user;
     int disable_multiplexing;
