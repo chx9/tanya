@@ -33,11 +33,11 @@ class RedisClusterProxy
         @cluster.start if !@cluster.instances
         @entry_point = @cluster.instances.first
         @options = opts
-        @cmdpath = File.join($redis_proxy_path, 'src/redis-cluster-proxy')
+        @cmdpath = File.join($redis_proxy_path, 'src/tanya')
         if !File.exists?(@cmdpath) && !File.symlink?(@cmdpath)
             @cluster.destroy!
-            STDERR.puts ("Could not find redis-cluster-proxy in:\n'" +
-                         @cmdpath + "'\nCompile redis-cluster-proxy "+
+            STDERR.puts ("Could not find tanya in:\n'" +
+                         @cmdpath + "'\nCompile tanya "+
                          "before making tests!").red
             exit 1
         end
@@ -45,7 +45,7 @@ class RedisClusterProxy
         @redis_cli = @redis_paths['redis-cli']
         ts = Time.now.strftime('%Y%m%d-%H%M%S')
         @logfile = File.join(RedisProxyTestCase::LOGDIR,
-                             "redis-cluster-proxy-#{@port}-#{ts}.log")
+                             "tanya-#{@port}-#{ts}.log")
         @valgrind = (valgrind == true)
         if @valgrind
             @valgrind_logfile = File.join(RedisProxyTestCase::LOGDIR,
