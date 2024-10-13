@@ -2182,7 +2182,10 @@ static int populateConnectionsPool(proxyThread *thread, int rate) {
             redisClusterConnection *conn = createClusterConnection();
             if (conn == NULL) break;
             conn->context = redisConnectNonBlock(node->ip, node->port);
-            if (conn->context == NULL) continue;
+            if (conn->context == NULL || conn->context->err){
+                freeClusterConnection(conn);
+                continue;
+            } 
             if (!installIOHandler(el, conn->context->fd, AE_WRITABLE,
                 writeToClusterHandler, conn, 0)) {
                 proxyLogWarn("Populate connection pool: failed to install "
@@ -2578,6 +2581,7 @@ static int disableMultiplexingForClient(client *c) {
         clusterNode *source = node->duplicated_from;
         assert(source != NULL);
         redisClusterConnection *conn = source->connection;
+        if(!conn) continue;
         if (pool_connections != NULL) {
             redisClusterConnection *poolconn = NULL;
             /* Try to find and remove the connection associated to the name
