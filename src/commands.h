@@ -63,5 +63,5 @@ typedef struct redisCommandDef {
 
 
 extern struct redisCommandDef redisCommandTable[203];
-
+extern struct redisCommandDef psubscribeCommand_;
 #endif /* __REDIS_CLUSTER_PROXY_COMMANDS_H__  */

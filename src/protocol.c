@@ -22,6 +22,7 @@
 #include "logger.h"
 #include "reply_order.h"
 #include "sds.h"
+#include "util.h"
 
 int initReplyArray(client *c) {
     if (c->reply_array != NULL) return 1;
@@ -153,4 +154,32 @@ void addReplyRaw(client *c, const char *buf, size_t len, uint64_t req_id) {
     c->obuf = sdscatlen(c->obuf, buf, len);
     c->min_reply_id = req_id + 1;
     appendUnorderedRepliesToBuffer(c);
+}
+
+void addReplyLongLong(client *c,long long ll, uint64_t req_id){
+    char buf[128];
+    int len;
+    buf[0] = ':';
+    len = ll2string(buf+1, sizeof(buf)-1, ll);
+    buf[len+1] = '\r';
+    buf[len+2] = '\n';
+    addReplyRaw(c, buf, len+3, req_id);
+}
+
+void addReplyPubsubSubscribed(client *c, sds channel, uint64_t req_id){
+    sds tp = sdscatprintf(sdsempty(), "*3\r\n"
+                                       "$9\r\nsubscribe\r\n"
+                                       "$%d\r\n%s\r\n", (int)sdslen(channel), channel);
+    addReplyRaw(c, tp, sdslen(tp), req_id);
+    sdsfree(tp);
+    addReplyLongLong(c, c->subscribe_count, req_id);
+}
+
+void addReplyPubsubPsubscribed(client *c, sds pattern, uint64_t req_id){
+    sds tp = sdscatprintf(sdsempty(), "*3\r\n"
+                                       "$10\r\nsubscribe\r\n"
+                                       "$%d\r\n%s\r\n", (int)sdslen(pattern), pattern);
+    addReplyRaw(c, tp, sdslen(tp), req_id);
+    sdsfree(tp);
+    addReplyLongLong(c, c->psubscribe_count, req_id);
 }
