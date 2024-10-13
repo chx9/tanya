@@ -15,16 +15,20 @@
  * along with this program.  If not, see <http://www.gnu.org/licenses/>.
  */
 
+#include "adlist.h"
 #include "fmacros.h"
+#include "hiredis.h"
 #include "redis_config.h"
 #include "proxy.h"
 #include "logger.h"
+#include "sds.h"
 #include "zmalloc.h"
 #include "protocol.h"
 #include "endianconv.h"
 #include "util.h"
 #include "help.h"
 #include "reply_order.h"
+#include "pubsub.h"
 #include <stdio.h>
 #include <string.h>
 #include <strings.h>
@@ -61,6 +65,7 @@
 #define THREAD_MSG_STOP                     1
 
 #define CLIENT_CLOSE_AFTER_REPLY            (1 << 1)
+#define CLIENT_PUBSUB                       (1 << 2)
 
 #define UNUSED(V) ((void) V)
 
@@ -102,6 +107,42 @@
 #define sdsRepr(s) (sdscatrepr(sdsempty(), s, sdslen(s)))
 #define PROXY_CMD_LOG_MAX_LEN   4096
 
+uint64_t dictSdsHash(const void *key) {
+    return dictGenHashFunction((unsigned char*)key, sdslen((char*)key));
+}
+
+int dictSdsKeyCompare(void *privdata, const void *key1, const void *key2) {
+    int l1,l2;
+    DICT_NOTUSED(privdata);
+
+    l1 = sdslen((sds)key1);
+    l2 = sdslen((sds)key2);
+    if (l1 != l2) return 0;
+    return memcmp(key1, key2, l1) == 0;
+}
+
+void dictListDestructor(void *privdata, void *val) {
+    DICT_NOTUSED(privdata);
+    
+    listRelease(val);
+}
+
+void dictSdsDestructor(void *privdata, void *val) {
+    DICT_NOTUSED(privdata);
+
+    sdsfree(val);
+}
+
+dictType sdsKeyListValueDictType = {
+        dictSdsHash,                /* hash function */
+        NULL,                       /* key dup */
+        NULL,                       /* val dup */
+        dictSdsKeyCompare,          /* key compare */
+        dictSdsDestructor,          /* key destructor */
+        dictListDestructor          /* val destructor */
+};
+
+
 /* Globals */
 
 redisClusterProxy proxy;
@@ -120,8 +161,10 @@ _Thread_local int thread_id;
 /* Forward declarations. */
 
 static proxyThread *createProxyThread(int index);
+static pubsubThread *createPubsubThread();
 static void freeProxyThread(proxyThread *thread);
 static void *execProxyThread(void *ptr);
+static void *execPubsubThread(void *ptr);
 static client *createClient(int fd, char *ip);
 static void unlinkClient(client *c);
 static void freeClient(client *c);
@@ -896,6 +939,57 @@ final:
     freeRequest(req);
     if (cursor) sdsfree(cursor);
     return status;
+}
+
+int subscribeCommand(void *r){
+    clientRequest *req = r;
+    client *c = req->client;
+    if(!config.enable_pubsub){
+        addReplyError(c, "Pub/Sub is not enabled, check configuration please", req->id);
+        freeRequest(req);
+        return PROXY_COMMAND_HANDLED;
+    }
+    if(req->argc == 1){
+        addReplyErrorWrongArgc(c, "subscribe", req->id);
+        freeRequest(req);
+        return PROXY_COMMAND_HANDLED;
+    }
+    for(int i=1;i<req->argc;i++){
+        c->subscribe_count++;
+        sds channel = sdsnewlen(req->buffer+req->offsets[i], req->lengths[i]);
+        pubsubSubscribeChannel(c, channel);
+        addReplyPubsubSubscribed(c, channel, req->id);
+        sdsfree(channel);
+    } 
+    c->flags |= CLIENT_PUBSUB;
+    freeRequest(req);
+    return PROXY_COMMAND_HANDLED;
+}
+
+int psubscribeCommand(void* r){
+    clientRequest *req = r;
+    client *c = req->client;
+    if(!config.enable_pubsub){
+        addReplyError(c, "Pub/Sub is not enabled, check configuration please", req->id);
+        freeRequest(req);
+        return PROXY_COMMAND_HANDLED;
+    }
+    if(req->argc == 1){
+        addReplyErrorWrongArgc(c, "psubscribe", req->id);
+        freeRequest(req);
+        return PROXY_COMMAND_HANDLED;
+    }
+    for(int i=1;i<req->argc;i++){
+        c->psubscribe_count++;
+        sds pattern = sdsnewlen(req->buffer+req->offsets[i], req->lengths[i]);
+        pubsubPsubscribePattern(c, pattern);
+        addReplyPubsubSubscribed(c, pattern, req->id);
+        sdsfree(pattern);
+    }
+    c->flags |= CLIENT_PUBSUB;
+    freeRequest(req);
+    return PROXY_COMMAND_HANDLED;
+
 }
 
 int proxyCommand(void *r) {
@@ -1943,11 +2037,23 @@ static void initProxy(void) {
         }
         pthread_t *t = &(proxy.threads[i]->thread);
         if (pthread_create(t, NULL, execProxyThread, proxy.threads[i])){
-            fprintf(stderr, "FATAL: Failed to start thread %d.\n", i);
             proxyLogErr("FATAL: Failed to start thread %d.", i);
             exit(1);
         }
     }
+    if(config.enable_pubsub){
+        proxy.psThread = createPubsubThread();
+        if(proxy.psThread == NULL){
+            proxyLogErr("FATAL: failed to create pubsub thread");
+            exit(1);
+        }
+        pthread_t *t = &(proxy.psThread->thread);
+        if( pthread_create(t, NULL, execPubsubThread, proxy.psThread)){
+            proxyLogErr("FATAL: Failed to start pubsubthread");
+            exit(1);
+        }
+    }
+
     proxyLogHdr("All thread(s) started!");
 }
 
@@ -2095,6 +2201,90 @@ static int processThreadPipeBufferForNewClients(proxyThread *thread) {
     if (processed > 0)
         sdsrange(thread->msgbuffer, processed * msgsize, -1);
     return processed;
+}
+static void processPubsubMsg(redisReply *pubsub_msg){
+    proxyThread *thread = proxy.threads[getCurrentThreadID()];
+    if(pubsub_msg->elements != 4){
+        freeReplyObject(pubsub_msg);
+        return;
+    }
+    sds msg_type = sdsnew(pubsub_msg->element[0]->str); 
+    if(strcmp(msg_type, "pmessage") !=0 ){
+        freeReplyObject(pubsub_msg);
+        return;
+    }
+    sds channel = sdsnew(pubsub_msg->element[2]->str); 
+    sds msg = sdsnew(pubsub_msg->element[3]->str); 
+    sds reply = sdscatprintf(sdsempty(), "*3\r\n"
+                                         "$7\r\n"
+                                         "message\r\n"
+                                         "$%zu\r\n"
+                                         "%s\r\n"
+                                         "$%zu\r\n"
+                                         "%s\r\n", sdslen(channel), channel, sdslen(msg), msg);
+    dictEntry *de; 
+    de = dictFind(thread->pubsub_channels, channel);
+    if(de != NULL){
+        list *clients = dictGetVal(de); 
+        listNode *ln;
+        listIter li;
+        listRewind(clients, &li);
+        while((ln = listNext(&li))){
+            client* c = ln->value;
+            if (!c->obuf) {
+                c->obuf = sdsempty();
+            }
+            c->obuf = sdscatlen(c->obuf, reply, sdslen(reply));
+        }
+    }
+    sdsfree(reply);
+    dictIterator *di = dictGetIterator(thread->pubsub_patterns);
+    de = NULL;
+    if(di){
+        while((de = dictNext(di)) != NULL) {
+            sds pattern = dictGetKey(de);
+            list *clients = dictGetVal(de);
+            sds p_reply = sdscatprintf(sdsempty(), "*4\r\n"
+                                                   "$8\r\n"
+                                                   "pmessage\r\n"
+                                                   "$%zu\r\n"
+                                                   "%s\r\n"
+                                                   "$%zu\r\n"
+                                                   "%s\r\n"
+                                                   "$%zu\r\n"
+                                                   "%s\r\n", sdslen(pattern), pattern, sdslen(channel), channel, sdslen(msg), msg);
+            if(stringmatchlen_(pattern, sdslen(pattern), channel, sdslen(channel), 0)){
+                listIter li;
+                listNode* ln;
+                listRewind(clients, &li);
+                while ((ln = listNext(&li))) {
+                    client *c = ln->value;
+                    if(!c->obuf){
+                        c->obuf = sdsempty();
+                    }
+                    c->obuf = sdscatlen(c->obuf, p_reply, sdslen(p_reply));
+                }
+            }
+            sdsfree(p_reply);
+        }
+    }
+}
+
+static void readPubsubMsg(aeEventLoop *el, int fd, void* privatedata, int mask){
+    UNUSED(el);
+    UNUSED(mask);
+    UNUSED(privatedata);
+    redisReply* pubsub_msg;
+    int nread = read(fd, &pubsub_msg, sizeof(redisReply*));
+    if(nread == -1){
+        if(errno == EAGAIN){
+            return;
+        }else{
+            proxyLogDebug("Error reading from thread pubsub pipe:%s", strerror(errno));
+            return;
+        }
+    }
+    processPubsubMsg(pubsub_msg);
 }
 
 static void readThreadPipe(aeEventLoop *el, int fd, void *privdata, int mask) {
@@ -2298,7 +2488,35 @@ finished:
     thread->is_spawning_connections = 0;
     return AE_NOMORE;
 }
-
+static void freePubsubThread(pubsubThread* psThread){
+    proxyLogDebug("freeing pubsub thread");
+    if(psThread->loop!=NULL){
+        aeDeleteEventLoop(psThread->loop);
+    }
+    zfree(psThread);
+}
+static pubsubThread *createPubsubThread(){
+    pubsubThread* psThread = zcalloc(sizeof(*psThread));
+    if(psThread == NULL){
+        return NULL;
+    }
+    psThread->loop = aeCreateEventLoop(10);
+    psThread->cluster = createCluster(-1);
+    if(psThread->cluster == NULL){
+        proxyLogErr("ERROR: failed to alloc cluster for pubsubThread");
+        freePubsubThread(psThread);
+        return NULL;
+    }
+    if(!fetchClusterConfiguration(psThread->cluster, config.entry_points, config.entry_points_count)){
+        proxyLogErr("ERROR: Failed to fetch cluster configuration");
+        freePubsubThread(psThread);
+        return NULL;
+    } 
+    printClusterConfiguration(psThread->cluster);
+    psThread->pubsub_client = createClient(-1, "");
+    psThread->pubsub_client->flags |= CLIENT_PUBSUB;
+    return psThread; 
+}
 static proxyThread *createProxyThread(int index) {
     int is_first = (index == 0);
     proxyThread *thread = zcalloc(sizeof(*thread));
@@ -2309,12 +2527,19 @@ static proxyThread *createProxyThread(int index) {
         zfree(thread);
         return NULL;
     }
+    if (pipe(thread->pubsub_io) == -1) {
+        proxyLogErr("ERROR: failed to open pubsub pipe for thread!");
+        zfree(thread);
+        return NULL;
+    }
     thread->thread_id = index;
     thread->next_client_id = 0;
     thread->process_clients = 0;
     thread->connections_pool = listCreate();
     thread->is_spawning_connections = 0;
     thread->cluster = createCluster(index);
+    thread->pubsub_channels = dictCreate(&sdsKeyListValueDictType, NULL);
+    thread->pubsub_patterns = dictCreate(&sdsKeyListValueDictType, NULL);
     if (thread->cluster == NULL) {
         proxyLogErr("ERROR: failed to allocate cluster for thread: %d",
                     index);
@@ -2358,6 +2583,12 @@ static proxyThread *createProxyThread(int index) {
     {
         proxyLogErr("Failed to install thread pipe read handler for "
                     "thread %d", index);
+        if (errno > 0) proxyLogErr("Thread pipe error: %s", strerror(errno));
+        goto fail;
+    }
+    if(!installIOHandler(thread->loop, thread->pubsub_io[THREAD_IO_READ],
+                          AE_READABLE, readPubsubMsg, thread, 0)) {
+        proxyLogErr("Failed to install thread pipe read handler for thread %d", index);
         if (errno > 0) proxyLogErr("Thread pipe error: %s", strerror(errno));
         goto fail;
     }
@@ -4239,6 +4470,21 @@ int processRequest(clientRequest *req, int *parsing_status,
         goto invalid_request;
     }
     req->command = cmd;
+    if(c->flags & CLIENT_PUBSUB){
+        if(strcasecmp(req->command->name, "ping") &&
+           strcasecmp(req->command->name, "subscribe") &&
+           strcasecmp(req->command->name, "psubscribe") &&
+           strcasecmp(req->command->name, "unsubscribe") &&
+           strcasecmp(req->command->name, "punsubscribe")){
+            sds tp = sdsempty();
+            tp = sdscatfmt(tp, "Can't execute '%s': only (P)SUBSCRIBE /(P)UNSUBSCRIBE / PING are allowed in this context", cmd->name);
+            addReplyError(c, tp, req->id); 
+            sdsfree(tp);
+            if(command_name) sdsfree(command_name);
+            freeRequest(req);
+            return 1;
+        } 
+    }
     if (cmd->handle && cmd->handle(req) == PROXY_COMMAND_HANDLED) {
         if (command_name) sdsfree(command_name);
         return 1;
@@ -4500,7 +4746,18 @@ static int addChildRequestReply(clientRequest *req, char *replybuf, int len) {
     }
     return completed;
 }
-
+static int sendPubsubMsgToThread(redisReply *reply, int tid){
+    proxyThread *thread = proxy.threads[tid];
+    int fd = thread->pubsub_io[THREAD_IO_WRITE];
+    int size = sizeof(redisReply*);
+    int nwritten = 0;
+    int n = 0;
+    while(nwritten<size){
+        n = write(fd, &reply+nwritten, size); 
+        nwritten += n;
+    } 
+    return 0;
+}
 static int processClusterReplyBuffer(redisContext *ctx, clusterNode *node,
                                      int thread_id)
 {
@@ -4530,6 +4787,16 @@ static int processClusterReplyBuffer(redisContext *ctx, clusterNode *node,
          * (ie. a disconnected client). In this case, just dequeue the list
          * node containing the NULL placeholder and directly skip to
          * 'consume_buffer' in order to process the remaining reply buffer. */
+
+        // handle pubsub
+        if(node->flags & PUBSUB_NODE){
+            // redirect to other thread through pipe
+            for(int i=0;i<config.num_threads;i++){
+                redisReply* reply2send = dupRedisReply(reply);
+                sendPubsubMsgToThread(reply2send, i);
+            }
+            goto consume_buffer;
+        } 
         if (req == NULL) {
             list *queue = node->connection->requests_pending;
             /* It should never happen that the request is NULL because of an
@@ -4768,6 +5035,21 @@ static void readClusterReply(aeEventLoop *el, int fd,
     } else replies = processClusterReplyBuffer(ctx, node, thread_id);
     UNUSED(replies);
     if (errmsg != NULL) sdsfree(errmsg);
+}
+static void *execPubsubThread(void *ptr){
+    pubsubThread * psThread = (pubsubThread*) ptr;
+    clientRequest *req = createRequest(proxy.psThread->pubsub_client);
+    req->buffer = sdsnew("*2\r\n$10\r\npsubscribe\r\n$1\r\n*\r\n");
+    req->command = &psubscribeCommand_;
+    req->node = getFirstMappedNode(psThread->cluster);
+    req->node->flags |= PUBSUB_NODE;
+    enqueueRequestToSend(req);
+    handleNextRequestsToCluster(req->node, NULL); 
+    pthread_setcancelstate(PTHREAD_CANCEL_ENABLE, NULL);
+    pthread_setcanceltype(PTHREAD_CANCEL_ASYNCHRONOUS, NULL);
+    aeMain(psThread->loop);
+    proxyLogInfo("pubsub thread ended");
+    return NULL;
 }
 
 static void *execProxyThread(void *ptr) {

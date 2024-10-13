@@ -28,7 +28,8 @@ int securityWarningCommand(void *req);
 int pingCommand(void *req);
 int authCommand(void *req);
 int scanCommand(void *req);
-
+int subscribeCommand(void *req);
+int psubscribeCommand(void* req);
 /* Reply Handlers */
 int mergeReplies(void *reply, void *request, char *buf, int len);
 int getFirstMultipleReply(void *reply, void *request, char *buf, int len);
@@ -74,7 +75,7 @@ struct redisCommandDef redisCommandTable[203] = {
     {"module", -2, 0, 0, 0, 0, 1, NULL, NULL, NULL},
     {"monitor", 1, 0, 0, 0, 0, 1, NULL, NULL, NULL},
     {"geohash", -2, 1, 1, 1, 0, 0, NULL, NULL, NULL},
-    {"psubscribe", -2, 0, 0, 0, 0, 1, NULL, NULL, NULL},
+    {"psubscribe", -2, 0, 0, 0, 0, 0, NULL, psubscribeCommand, NULL},
     {"hget", 3, 1, 1, 1, 0, 0, NULL, NULL, NULL},
     {"psetex", 4, 1, 1, 1, 0, 0, NULL, NULL, NULL},
     {"eval", -3, 0, 0, 0, 0, 0, evalGetKeys, NULL, NULL},
@@ -168,7 +169,7 @@ struct redisCommandDef redisCommandTable[203] = {
     {"ping", -1, 0, 0, 0, 0, 0, NULL, pingCommand, NULL},
     {"zrevrangebylex", -4, 1, 1, 1, 0, 0, NULL, NULL, NULL},
     {"flushall", -1, 0, 0, 0, 0, 0, NULL, NULL, getFirstMultipleReply},
-    {"subscribe", -2, 0, 0, 0, 0, 1, NULL, NULL, NULL},
+    {"subscribe", -2, 0, 0, 0, 0, 0, NULL, subscribeCommand, NULL},
     {"evalsha", -3, 0, 0, 0, 0, 0, evalGetKeys, NULL, NULL},
     {"zremrangebyrank", 4, 1, 1, 1, 0, 0, NULL, NULL, NULL},
     {"publish", 3, 0, 0, 0, 0, 1, NULL, NULL, NULL},
@@ -274,3 +275,4 @@ struct redisCommandDef redisCommandTable[203] = {
     /* Custom Commands */
     {"proxy", -2, 0, 0, 0, 0, 0, NULL, proxyCommand, NULL}
 };
+struct redisCommandDef psubscribeCommand_ = {"psubscribe", -2, 0, 0, 0, 0, 0, NULL, NULL, NULL};

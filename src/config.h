@@ -32,7 +32,7 @@
 #define DEFAULT_THREADS                     8
 #define DEFAULT_TCP_KEEPALIVE               300
 #define DEFAULT_TCP_BACKLOG                 511
-#define DEFAULT_CONNECTIONS_POOL_SIZE       10
+#define DEFAULT_CONNECTIONS_POOL_SIZE       0
 #define DEFAULT_CONNECTIONS_POOL_MINSIZE    10
 #define DEFAULT_CONNECTIONS_POOL_INTERVAL   50
 #define DEFAULT_CONNECTIONS_POOL_SPAWNRATE  2
@@ -63,6 +63,7 @@ typedef struct {
     int dump_queries;
     int dump_buffer;
     int dump_queues;
+    int enable_pubsub;
     char *auth;
     char *auth_user;
     int disable_multiplexing;
