@@ -2362,29 +2362,6 @@ fail:
     return NULL;
 }
 
-static void handlePendingAwakeMessages(aeEventLoop *el, int fd, void *privdata,
-                                       int mask)
-{
-    UNUSED(el);
-    UNUSED(fd);
-    UNUSED(mask);
-    proxyThread *thread = privdata;
-    listIter li;
-    listNode *ln;
-    listRewind(thread->pending_messages, &li);
-    while ((ln = listNext(&li))) {
-        sds msg = ln->value;
-        int sent = sendMessageToThread(thread, msg);
-        if (sent == -1) continue;
-        else {
-            listDelNode(thread->pending_messages, ln);
-            if (!sent) {
-                proxyLogErr("Failed to send message to thread %d",
-                            thread->thread_id);
-            }
-        }
-    }
-}
 
 static int sendMessageToThread(proxyThread *thread, sds buf) {
     int fd = thread->io[THREAD_IO_WRITE];
@@ -2393,33 +2370,13 @@ static int sendMessageToThread(proxyThread *thread, sds buf) {
     while (totwritten < buflen) {
         nwritten = write(fd, buf + nwritten, sdslen(buf));
         if (nwritten == -1) {
-            if (errno == EAGAIN) {
-                goto install_write_handler;
-            }
             sdsfree(buf);
             return 0;
         } else if (nwritten == 0) break;
         totwritten += nwritten;
     }
-    if (totwritten == buflen) {
-        sdsfree(buf);
-        aeDeleteFileEvent(thread->loop, fd, AE_WRITABLE);
-    } else goto install_write_handler;
-    return 1;
-install_write_handler:
-    sdsrange(buf, totwritten, -1);
-    listAddNodeTail(thread->pending_messages, buf);
-    if (!installIOHandler(thread->loop, fd, AE_WRITABLE,
-        handlePendingAwakeMessages, thread, 0))
-    {
-        proxyLogDebug("Failed to create thread awake write handler on "
-                      "thread %d", thread->thread_id);
-        listNode *ln = listSearchKey(thread->pending_messages, buf);
-        if (ln != NULL) listDelNode(thread->pending_messages, ln);
-        sdsfree(buf);
-        return 0;
-    }
-    return -1;
+    sdsfree(buf);
+    return (totwritten == buflen);
 }
 
 static int awakeThreadForNewClient(proxyThread *thread, client *c) {
