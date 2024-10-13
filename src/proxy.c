@@ -940,7 +940,23 @@ final:
     if (cursor) sdsfree(cursor);
     return status;
 }
-
+int publishCommand(void* r){
+    clientRequest *req = r;
+    client *c = req->client;
+    proxyThread *thread = proxy.threads[getCurrentThreadID()];
+    if(!config.enable_pubsub){
+        addReplyError(c, "Pub/Sub is not enabled, check configuration please", req->id);
+        freeRequest(req);
+        return PROXY_COMMAND_HANDLED;
+    }
+    if(req->argc != 3){
+        addReplyErrorWrongArgc(c, "publish", req->id);
+        freeRequest(req);
+        return PROXY_COMMAND_HANDLED;
+    }
+    req->node = getFirstMappedNode(thread->cluster);
+    return PROXY_COMMAND_UNHANDLED;
+}
 int subscribeCommand(void *r){
     clientRequest *req = r;
     client *c = req->client;

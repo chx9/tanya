@@ -30,6 +30,7 @@ int authCommand(void *req);
 int scanCommand(void *req);
 int subscribeCommand(void *req);
 int psubscribeCommand(void* req);
+int publishCommand(void* req);
 /* Reply Handlers */
 int mergeReplies(void *reply, void *request, char *buf, int len);
 int getFirstMultipleReply(void *reply, void *request, char *buf, int len);
@@ -172,7 +173,7 @@ struct redisCommandDef redisCommandTable[203] = {
     {"subscribe", -2, 0, 0, 0, 0, 0, NULL, subscribeCommand, NULL},
     {"evalsha", -3, 0, 0, 0, 0, 0, evalGetKeys, NULL, NULL},
     {"zremrangebyrank", 4, 1, 1, 1, 0, 0, NULL, NULL, NULL},
-    {"publish", 3, 0, 0, 0, 0, 1, NULL, NULL, NULL},
+    {"publish", 3, 0, 0, 0, 0, 0, NULL, publishCommand, NULL},
     {"zrevrangebyscore", -4, 1, 1, 1, 0, 0, NULL, NULL, NULL},
     {"swapdb", 3, 0, 0, 0, 0, 0, NULL, NULL, NULL},
     {"latency", -2, 0, 0, 0, 0, 1, NULL, NULL, NULL},
