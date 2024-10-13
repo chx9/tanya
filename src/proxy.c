@@ -722,6 +722,7 @@ int securityWarningCommand(void *r) {
 int pingCommand(void *r) {
     clientRequest *req = r;
     addReplyString(req->client, "PONG", req->id);
+    freeRequest(r);
     return PROXY_COMMAND_HANDLED;
 }
 
@@ -744,6 +745,7 @@ int multiCommand(void *r) {
         c->multi_request->owned_by_client = 1;
     } else return PROXY_COMMAND_UNHANDLED;
     addReplyString(c, "OK", req->id);
+    freeRequest(r);
     return PROXY_COMMAND_HANDLED;
 }
 
@@ -806,6 +808,7 @@ int authCommand(void *r) {
 final:
     if (user != NULL && user != c->auth_user) sdsfree(user);
     if (passw != NULL && passw != c->auth_passw) sdsfree(passw);
+    freeRequest(req);
     return status;
 }
 
@@ -890,6 +893,7 @@ int scanCommand(void *r) {
     /* Set the choosen node in the request. */
     req->node = node;
 final:
+    freeRequest(req);
     if (cursor) sdsfree(cursor);
     return status;
 }
