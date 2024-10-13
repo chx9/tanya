@@ -3085,7 +3085,7 @@ static int writeToCluster(aeEventLoop *el, int fd, clientRequest *req) {
         /* Request has not been completely written, so try to install the write
          * handler. */
         if (!installIOHandler(el, fd, AE_WRITABLE, writeToClusterHandler,
-            req->node, 0))
+            req->node->connection, 0))
         {
             addReplyError(req->client, ERROR_CLUSTER_WRITE_FAIL, req->id);
             proxyLogErr("Failed to create write handler for request "
