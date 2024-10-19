@@ -33,22 +33,27 @@
 #include "commands.h"
 #include "sds.h"
 #include "rax.h"
+#include "dict.h"
 #include "config.h"
 #include "version.h"
+
+#define CLIENT_CLOSE_AFTER_REPLY            (1 << 1)
+#define CLIENT_PUBSUB                       (1 << 2)
 
 #define CLIENT_STATUS_NONE          0
 #define CLIENT_STATUS_LINKED        1
 #define CLIENT_STATUS_UNLINKED      2
 
+#define PUBSUB_NODE                 1
 #define PROXY_MAIN_THREAD_ID -1
 #define PROXY_UNKN_THREAD_ID -999
 
 #define getClientLoop(c) (proxy.threads[c->thread_id]->loop)
-
 struct client;
 typedef struct proxyThread {
     int thread_id;
     int io[2];
+    int pubsub_io[2];
     pthread_t thread;
     redisCluster *cluster;
     aeEventLoop *loop;
@@ -56,6 +61,8 @@ typedef struct proxyThread {
     list *unlinked_clients;
     list *pending_messages;
     list *connections_pool;
+    dict *pubsub_channels; // channel => client list
+    dict *pubsub_patterns; // pattern => client list
     int is_spawning_connections;
     uint64_t next_client_id;
     _Atomic uint64_t process_clients;
@@ -109,6 +116,7 @@ typedef struct {
     int tcp_backlog;
     char neterr[ANET_ERR_LEN];
     struct proxyThread **threads;
+    struct pubsubThread *psThread;
     _Atomic uint64_t numclients;
     rax *commands;
     int min_reserved_fds;
@@ -130,6 +138,8 @@ typedef struct client {
     size_t written;
     list *reply_array;
     int status;
+    int subscribe_count;
+    int psubscribe_count;
     int has_write_handler;
     int flags;
     uint64_t next_request_id;
@@ -138,6 +148,8 @@ typedef struct client {
     rax *unordered_replies;
     list *requests;                  /* All client's requests */
     list *requests_to_process;       /* Requests not completely parsed */
+    list *subscribed_channels;
+    list *subscribed_patterns;
     int requests_with_write_handler; /* Number of request that are still
                                       * being writing to cluster */
     list *requests_to_reprocess;     /* Requestst to re-process after cluster
@@ -161,6 +173,15 @@ typedef struct client {
     listNode *unlinked_clients_lnode; /* Pointer to node in
                                        * thread->unlinked_clients list */
 } client;
+
+typedef struct pubsubThread{
+    int thread_id;
+    pthread_t thread;
+    redisCluster *cluster;
+    aeEventLoop *loop;
+    client *pubsub_client;
+    sds msgbuffer;
+} pubsubThread;
 
 int getCurrentThreadID(void);
 int processRequest(clientRequest *req, int *parsing_status,

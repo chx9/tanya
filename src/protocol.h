@@ -46,15 +46,16 @@ void addReplyStringLen(client *c, const char *str, int len, uint64_t req_id);
 void addReplyString(client *c, const char *str, uint64_t req_id);
 void addReplyBulkStringLen(client *c, const char *str, int len,
                            uint64_t req_id);
-void addReplyBulkString(client *c, const char *str, uint64_t req_id);
 void addReplyInt(client *c, int64_t integer, uint64_t req_id);
+void addReplyLongLong(client *c,long long ll, uint64_t req_id);
 void addReplyNull(client *c, uint64_t req_id);
 void addReplyErrorLen(client *c, const char *err, int len, uint64_t req_id);
+void addReplyBulkString(client *c, const char *str, uint64_t req_id);
 void addReplyError(client *c, const char *err, uint64_t req_id);
 void addReplyErrorUnknownSubcommand(client *c, const char *subcmd,
                                     const char *help, uint64_t req_id);
 void addReplyErrorWrongArgc(client *c, const char *cmdname, uint64_t req_id);
 void addReplyHelp(client *c, const char **help, uint64_t req_id);
 void addReplyRaw(client *c, const char *buf, size_t len, uint64_t req_id);
-
+void addReplyPubsubSubscribed(client *c, sds channel, uint64_t req_id);
 #endif /* __REDIS_CLUSTER_PROXY_PROTOCOL_H__ */
