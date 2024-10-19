@@ -64,8 +64,6 @@
 
 #define THREAD_MSG_STOP                     1
 
-#define CLIENT_CLOSE_AFTER_REPLY            (1 << 1)
-#define CLIENT_PUBSUB                       (1 << 2)
 
 #define UNUSED(V) ((void) V)
 
@@ -106,7 +104,9 @@
 #define strRepr(s) (sdscatrepr(sdsempty(), s, strlen(s)))
 #define sdsRepr(s) (sdscatrepr(sdsempty(), s, sdslen(s)))
 #define PROXY_CMD_LOG_MAX_LEN   4096
-
+int sdsCompare(void* a, void* b){
+    return !sdscmp(a,  b);
+}
 uint64_t dictSdsHash(const void *key) {
     return dictGenHashFunction((unsigned char*)key, sdslen((char*)key));
 }
@@ -160,6 +160,8 @@ _Thread_local int thread_id;
 
 /* Forward declarations. */
 
+extern int pubsubUnsubscribeAll(client *c);
+extern int pubsubUnsubscribe(client *c, sds pattern);
 static proxyThread *createProxyThread(int index);
 static pubsubThread *createPubsubThread();
 static void freeProxyThread(proxyThread *thread);
@@ -940,6 +942,26 @@ final:
     if (cursor) sdsfree(cursor);
     return status;
 }
+int unsubscribeCommand(void *r){
+    clientRequest *req = r;
+    client *c = req->client;
+    if(!config.enable_pubsub){
+        addReplyError(c, "Pub/Sub is not enabled, check configuration please", req->id);
+        freeRequest(req);
+        return PROXY_COMMAND_HANDLED;
+    }
+    int unsubscribe_cnt = 0;
+    if(req->argc == 1){
+        unsubscribe_cnt = pubsubUnsubscribeAll(c);   
+    }else{
+        for(int i=1;i<req->argc;i++){
+            sds channel_or_pattern = sdsnewlen(req->buffer+req->offsets[i], req->lengths[i]); 
+            unsubscribe_cnt += pubsubUnsubscribe(c, channel_or_pattern);
+        }
+    }
+    addReplyLongLong(c, unsubscribe_cnt, req->id);
+    return PROXY_COMMAND_HANDLED;
+}
 int publishCommand(void* r){
     clientRequest *req = r;
     client *c = req->client;
@@ -973,6 +995,9 @@ int subscribeCommand(void *r){
     for(int i=1;i<req->argc;i++){
         c->subscribe_count++;
         sds channel = sdsnewlen(req->buffer+req->offsets[i], req->lengths[i]);
+        if(c->subscribed_channels){
+            listAddNodeTail(c->subscribed_channels, sdsdup(channel));
+        }
         pubsubSubscribeChannel(c, channel);
         addReplyPubsubSubscribed(c, channel, req->id);
         sdsfree(channel);
@@ -998,6 +1023,9 @@ int psubscribeCommand(void* r){
     for(int i=1;i<req->argc;i++){
         c->psubscribe_count++;
         sds pattern = sdsnewlen(req->buffer+req->offsets[i], req->lengths[i]);
+        if(c->subscribed_patterns){
+            listAddNodeTail(c->subscribed_patterns, sdsdup(pattern));
+        }
         pubsubPsubscribePattern(c, pattern);
         addReplyPubsubSubscribed(c, pattern, req->id);
         sdsfree(pattern);
@@ -2219,6 +2247,7 @@ static int processThreadPipeBufferForNewClients(proxyThread *thread) {
     return processed;
 }
 static void processPubsubMsg(redisReply *pubsub_msg){
+    if(pubsub_msg == NULL) return;
     proxyThread *thread = proxy.threads[getCurrentThreadID()];
     if(pubsub_msg->elements != 4){
         freeReplyObject(pubsub_msg);
@@ -2761,6 +2790,10 @@ static client *createClient(int fd, char *ip) {
     c->min_reply_id = 0;
     c->requests_with_write_handler = 0;
     c->requests_to_reprocess = listCreate();
+    c->subscribed_channels = listCreate();
+    c->subscribed_patterns = listCreate();
+    listSetMatchMethod(c->subscribed_channels, sdsCompare);
+    listSetMatchMethod(c->subscribed_patterns, sdsCompare);
     c->pending_multiplex_requests = 0;
     c->multi_transaction = 0;
     c->multi_request = NULL;
@@ -3025,12 +3058,42 @@ static void freeClient(client *c) {
     freeAllClientRequests(c);
     listRelease(c->requests_to_reprocess);
     listRelease(c->requests);
+    listIter li;
+    listNode *ln;
+    dictEntry *de;
+    listRewind(c->subscribed_channels, &li);
+    while((ln = listNext(&li)) != NULL){
+        sds pattern = ln->value;
+        de = dictFind(thread->pubsub_channels, pattern); 
+        if(de != NULL){
+            list* clients = dictGetVal(de);
+            listNode *c_node = listSearchKey(clients, c);
+            if(c_node){
+                listDelNode(clients, c_node);
+            }
+        }
+    }
+
+    listRewind(c->subscribed_patterns, &li);
+    while((ln = listNext(&li)) != NULL){
+        sds pattern = ln->value;
+        de = dictFind(thread->pubsub_patterns, pattern); 
+        if(de != NULL){
+            list* clients = dictGetVal(de);
+            listNode *c_node = listSearchKey(clients, c);
+            if(c_node){
+                listDelNode(clients, c_node);
+            }
+        }
+    }
+    listRelease(c->subscribed_channels); 
+    listRelease(c->subscribed_patterns); 
     if (c->unordered_replies)
         raxFreeWithCallback(c->unordered_replies, (void (*)(void*))sdsfree);
     if (c->cluster != NULL) {
         freeCluster(c->cluster);
     }
-    listNode *ln = c->unlinked_clients_lnode;
+    ln = c->unlinked_clients_lnode;
     if (ln) ln->value = NULL;
     if (c->auth_user != NULL) sdsfree(c->auth_user);
     if (c->auth_passw != NULL) sdsfree(c->auth_passw);
@@ -4769,7 +4832,7 @@ static int sendPubsubMsgToThread(redisReply *reply, int tid){
     int nwritten = 0;
     int n = 0;
     while(nwritten<size){
-        n = write(fd, &reply+nwritten, size); 
+        n = write(fd, &reply+nwritten, size-nwritten); 
         nwritten += n;
     } 
     return 0;

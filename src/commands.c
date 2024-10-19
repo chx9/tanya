@@ -31,6 +31,7 @@ int scanCommand(void *req);
 int subscribeCommand(void *req);
 int psubscribeCommand(void* req);
 int publishCommand(void* req);
+int unsubscribeCommand(void *req);
 /* Reply Handlers */
 int mergeReplies(void *reply, void *request, char *buf, int len);
 int getFirstMultipleReply(void *reply, void *request, char *buf, int len);
@@ -83,7 +84,7 @@ struct redisCommandDef redisCommandTable[203] = {
     {"rename", 3, 1, 2, 1, 0, 0, NULL, NULL, NULL},
     {"dump", 2, 1, 1, 1, 0, 0, NULL, NULL, NULL},
     {"pubsub", -2, 0, 0, 0, 0, 1, NULL, NULL, NULL},
-    {"unsubscribe", -1, 0, 0, 0, 0, 1, NULL, NULL, NULL},
+    {"unsubscribe", -1, 0, 0, 0, 0, 0, NULL, unsubscribeCommand, NULL},
     {"slowlog", -2, 0, 0, 0, 0, 1, NULL, NULL, NULL},
     {"smove", 4, 1, 2, 1, 0, 0, NULL, NULL, NULL},
     {"xdel", -3, 1, 1, 1, 0, 0, NULL, NULL, NULL},

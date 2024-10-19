@@ -37,6 +37,9 @@
 #include "config.h"
 #include "version.h"
 
+#define CLIENT_CLOSE_AFTER_REPLY            (1 << 1)
+#define CLIENT_PUBSUB                       (1 << 2)
+
 #define CLIENT_STATUS_NONE          0
 #define CLIENT_STATUS_LINKED        1
 #define CLIENT_STATUS_UNLINKED      2
@@ -145,6 +148,8 @@ typedef struct client {
     rax *unordered_replies;
     list *requests;                  /* All client's requests */
     list *requests_to_process;       /* Requests not completely parsed */
+    list *subscribed_channels;
+    list *subscribed_patterns;
     int requests_with_write_handler; /* Number of request that are still
                                       * being writing to cluster */
     list *requests_to_reprocess;     /* Requestst to re-process after cluster
