@@ -114,6 +114,17 @@ ifeq ($(MALLOC),tcmalloc_minimal)
 	FINAL_LIBS+= -ltcmalloc_minimal
 endif
 
+# Default allocator defaults to Jemalloc on Linux and libc otherwise
+ifeq ($(uname_S),Linux)
+	MALLOC=jemalloc
+endif
+
+ifeq ($(MALLOC),jemalloc)
+	DEPENDENCY_TARGETS+= jemalloc
+	FINAL_CFLAGS+= -DUSE_JEMALLOC -I../deps/jemalloc/include
+	FINAL_LIBS := ../deps/jemalloc/lib/libjemalloc.a $(FINAL_LIBS)
+endif
+
 REDIS_CLUSTER_PROXY_CC=$(QUIET_CC)$(CC) $(FINAL_CFLAGS)
 REDIS_CLUSTER_PROXY_LD=$(QUIET_LINK)$(CC) $(FINAL_LDFLAGS)
 REDIS_CLUSTER_PROXY_INSTALL=$(QUIET_INSTALL)$(INSTALL)
